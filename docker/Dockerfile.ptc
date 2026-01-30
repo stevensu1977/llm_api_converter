@@ -1,0 +1,131 @@
+# =============================================================================
+# Anthropic-Bedrock Proxy - PTC-Enabled Docker Image
+# =============================================================================
+# Includes Docker CLI for Programmatic Tool Calling (PTC) support
+# Use with EC2 launch type (not Fargate) and mount Docker socket
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build environment
+# -----------------------------------------------------------------------------
+FROM rust:1.75-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    musl-tools \
+    musl-dev \
+    pkg-config \
+    libssl-dev \
+    perl \
+    make \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Determine target architecture and install appropriate musl target
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            rustup target add x86_64-unknown-linux-musl \
+            ;; \
+        "arm64") \
+            rustup target add aarch64-unknown-linux-musl \
+            ;; \
+        *) \
+            echo "Unsupported architecture: ${TARGETARCH}" && exit 1 \
+            ;; \
+    esac
+
+# Create app directory
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+
+# Create dummy main to cache dependencies
+RUN mkdir -p src && \
+    echo 'fn main() { println!("dummy"); }' > src/main.rs
+
+# Build dependencies (cached layer)
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            cargo build --release --target x86_64-unknown-linux-musl \
+            ;; \
+        "arm64") \
+            cargo build --release --target aarch64-unknown-linux-musl \
+            ;; \
+    esac && \
+    rm -rf src
+
+# Copy actual source code
+COPY src src
+COPY benches benches
+COPY tests tests
+
+# Touch main.rs to invalidate cache and rebuild
+RUN touch src/main.rs
+
+# Build the actual application
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            cargo build --release --target x86_64-unknown-linux-musl && \
+            cp target/x86_64-unknown-linux-musl/release/anthropic-bedrock-proxy /app/server \
+            ;; \
+        "arm64") \
+            cargo build --release --target aarch64-unknown-linux-musl && \
+            cp target/aarch64-unknown-linux-musl/release/anthropic-bedrock-proxy /app/server \
+            ;; \
+    esac
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime with Docker CLI
+# -----------------------------------------------------------------------------
+FROM alpine:3.19 AS runtime
+
+# Install runtime dependencies including Docker CLI
+RUN apk --no-cache add \
+    ca-certificates \
+    curl \
+    docker-cli \
+    && addgroup -g 1000 appgroup \
+    && adduser -D -u 1000 -G appgroup appuser \
+    # Add appuser to docker group (GID 999 on most systems)
+    && addgroup -g 999 docker || true \
+    && adduser appuser docker || true
+
+# Copy the binary
+COPY --from=builder /app/server /usr/local/bin/server
+
+# Set ownership
+RUN chown appuser:appgroup /usr/local/bin/server
+
+# Set environment defaults (PTC enabled)
+ENV HOST=0.0.0.0 \
+    PORT=8000 \
+    RUST_LOG=info \
+    ENVIRONMENT=production \
+    ENABLE_PTC=true \
+    PTC_SANDBOX_IMAGE=python:3.11-slim \
+    PTC_SESSION_TIMEOUT=270 \
+    PTC_EXECUTION_TIMEOUT=60 \
+    PTC_MEMORY_LIMIT=256m \
+    PTC_NETWORK_DISABLED=true
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Note: Run as root to access Docker socket
+# In production, configure proper socket permissions
+USER root
+
+# Working directory
+WORKDIR /app
+
+# Run the server
+ENTRYPOINT ["/usr/local/bin/server"]

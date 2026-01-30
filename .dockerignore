@@ -1,0 +1,63 @@
+# =============================================================================
+# Docker Build Ignore File
+# =============================================================================
+
+# Build artifacts
+target/
+*.rs.bk
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files (don't bake secrets into image)
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Test files
+tests/
+*.test.rs
+
+# Benchmarks
+benches/
+criterion/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker files (prevent recursive context)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Deployment configs
+deployment/
+cdk/
+
+# Scripts (not needed in runtime)
+scripts/
+
+# Misc
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Rust specific
+debug/
+*.pdb

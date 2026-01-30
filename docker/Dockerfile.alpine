@@ -1,0 +1,120 @@
+# =============================================================================
+# Anthropic-Bedrock Proxy - Alpine Docker Image
+# =============================================================================
+# Alternative to scratch image with shell access for debugging
+# Slightly larger (~25MB) but includes curl and shell
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build environment
+# -----------------------------------------------------------------------------
+FROM rust:1.75-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    musl-tools \
+    musl-dev \
+    pkg-config \
+    libssl-dev \
+    perl \
+    make \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Determine target architecture and install appropriate musl target
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            rustup target add x86_64-unknown-linux-musl \
+            ;; \
+        "arm64") \
+            rustup target add aarch64-unknown-linux-musl \
+            ;; \
+        *) \
+            echo "Unsupported architecture: ${TARGETARCH}" && exit 1 \
+            ;; \
+    esac
+
+# Create app directory
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+
+# Create dummy main to cache dependencies
+RUN mkdir -p src && \
+    echo 'fn main() { println!("dummy"); }' > src/main.rs
+
+# Build dependencies (cached layer)
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            cargo build --release --target x86_64-unknown-linux-musl \
+            ;; \
+        "arm64") \
+            cargo build --release --target aarch64-unknown-linux-musl \
+            ;; \
+    esac && \
+    rm -rf src
+
+# Copy actual source code
+COPY src src
+COPY benches benches
+COPY tests tests
+
+# Touch main.rs to invalidate cache and rebuild
+RUN touch src/main.rs
+
+# Build the actual application
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        "amd64") \
+            cargo build --release --target x86_64-unknown-linux-musl && \
+            cp target/x86_64-unknown-linux-musl/release/anthropic-bedrock-proxy /app/server \
+            ;; \
+        "arm64") \
+            cargo build --release --target aarch64-unknown-linux-musl && \
+            cp target/aarch64-unknown-linux-musl/release/anthropic-bedrock-proxy /app/server \
+            ;; \
+    esac
+
+# -----------------------------------------------------------------------------
+# Stage 2: Alpine runtime image
+# -----------------------------------------------------------------------------
+FROM alpine:3.19 AS runtime
+
+# Install minimal runtime dependencies
+RUN apk --no-cache add \
+    ca-certificates \
+    curl \
+    && addgroup -g 1000 appgroup \
+    && adduser -D -u 1000 -G appgroup appuser
+
+# Copy the binary
+COPY --from=builder /app/server /usr/local/bin/server
+
+# Set ownership
+RUN chown appuser:appgroup /usr/local/bin/server
+
+# Set environment defaults
+ENV HOST=0.0.0.0 \
+    PORT=8000 \
+    RUST_LOG=info \
+    ENVIRONMENT=production
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run as non-root user
+USER appuser:appgroup
+
+# Working directory
+WORKDIR /home/appuser
+
+# Run the server
+ENTRYPOINT ["/usr/local/bin/server"]

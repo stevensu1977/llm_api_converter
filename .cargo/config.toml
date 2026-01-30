@@ -1,0 +1,34 @@
+# Cargo build configuration for anthropic-bedrock-proxy
+
+[build]
+# Use all available CPU cores for compilation
+jobs = 8
+
+[profile.release]
+# Maximum optimization level
+opt-level = 3
+
+# Link-time optimization (increases build time, reduces binary size)
+lto = "fat"
+
+# Single codegen unit for better optimization (slower build, better runtime)
+codegen-units = 1
+
+# Strip debug symbols from binary
+strip = true
+
+# Abort on panic instead of unwinding (smaller binary)
+panic = "abort"
+
+[profile.dev]
+# Faster compilation in dev mode
+opt-level = 0
+debug = true
+
+[target.x86_64-unknown-linux-musl]
+# Static linking for minimal Docker images
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+# Static linking for ARM-based deployments
+rustflags = ["-C", "target-feature=+crt-static"]

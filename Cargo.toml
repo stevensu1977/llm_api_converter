@@ -1,10 +1,13 @@
 [package]
-name = "anthropic-bedrock-proxy"
+name = "llm-api-converter"
 version = "0.1.0"
 edition = "2021"
-authors = ["Anthropic Bedrock Proxy Team"]
-description = "High-performance Anthropic-Bedrock API proxy written in Rust"
+authors = ["LLM API Converter Contributors"]
+description = "High-performance LLM API gateway that unifies different AI provider APIs (Anthropic, OpenAI, Bedrock, etc.)"
 license = "MIT"
+repository = "https://github.com/yourusername/llm_api_converter"
+keywords = ["llm", "api", "proxy", "anthropic", "openai", "bedrock"]
+categories = ["web-programming", "api-bindings"]
 
 [dependencies]
 # Web framework

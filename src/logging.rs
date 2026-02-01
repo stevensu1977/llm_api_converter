@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Default maximum number of rotated files to keep
-pub const DEFAULT_MAX_FILES: usize = 10;
+pub const DEFAULT_MAX_FILES: usize = 5;
 
 /// A size-based rolling file writer
 ///

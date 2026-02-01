@@ -60,8 +60,8 @@ RUN case "${TARGETARCH}" in \
 
 # Copy actual source code
 COPY src src
-COPY benches benches
-COPY tests tests
+#COPY benches benches
+#COPY tests tests
 
 # Touch main.rs to invalidate cache and rebuild
 RUN touch src/main.rs

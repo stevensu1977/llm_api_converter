@@ -1,0 +1,18 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "Using pre-built Docker image"
+run:
+  runtime-version: latest
+  network:
+    port: 8000
+    env: PORT
+  env:
+    - name: AWS_REGION
+      value: "us-east-1"
+    - name: REQUIRE_API_KEY
+      value: "true"
+    - name: LOG_LEVEL
+      value: "info"

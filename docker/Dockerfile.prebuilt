@@ -1,0 +1,31 @@
+# Lightweight Dockerfile - uses pre-built binary
+# Build locally first: cargo build --release
+
+FROM debian:bookworm-slim
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -r -s /bin/false appuser
+
+WORKDIR /app
+
+# Copy pre-built binary
+# Use ARG to support both native and cross-compiled paths
+ARG BINARY_PATH=target/release/llm-api-converter
+COPY ${BINARY_PATH} /app/llm-api-converter
+
+# Set permissions
+RUN chmod +x /app/llm-api-converter && chown appuser:appuser /app/llm-api-converter
+
+USER appuser
+
+EXPOSE 8000
+
+ENV HOST=0.0.0.0
+ENV PORT=8000
+
+CMD ["/app/llm-api-converter"]

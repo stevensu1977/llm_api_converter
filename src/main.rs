@@ -1,10 +1,10 @@
-//! Anthropic-Bedrock API Proxy
+//! LLM API Converter
 //!
-//! A high-performance proxy service that translates between
-//! Anthropic Messages API format and AWS Bedrock's Converse API.
+//! A high-performance API gateway that unifies different AI provider APIs
+//! (Anthropic, OpenAI, Bedrock, etc.)
 
 use anyhow::Result;
-use anthropic_bedrock_proxy::{
+use llm_api_converter::{
     config::{Environment, Settings},
     logging::SizeBasedRollingWriter,
     server::App,
@@ -13,12 +13,11 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-/// Anthropic-Bedrock API Proxy
+/// LLM API Converter
 ///
-/// A high-performance proxy that translates Anthropic Messages API
-/// to AWS Bedrock Converse API.
+/// A high-performance API gateway that unifies different AI provider APIs.
 #[derive(Parser, Debug)]
-#[command(name = "anthropic-bedrock-proxy")]
+#[command(name = "llm-api-converter")]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Port to listen on (overrides PORT env var)

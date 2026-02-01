@@ -8,6 +8,7 @@ license = "MIT"
 repository = "https://github.com/yourusername/llm_api_converter"
 keywords = ["llm", "api", "proxy", "anthropic", "openai", "bedrock"]
 categories = ["web-programming", "api-bindings"]
+default-run = "llm-api-converter"
 
 [dependencies]
 # Web framework

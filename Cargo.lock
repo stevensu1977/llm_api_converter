@@ -95,47 +95,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anthropic-bedrock-proxy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "aws-config",
- "aws-sdk-bedrockruntime",
- "aws-sdk-dynamodb",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "axum",
- "base64 0.22.1",
- "bollard",
- "chrono",
- "clap",
- "config",
- "criterion",
- "dotenvy",
- "futures",
- "governor",
- "jsonwebtoken",
- "moka",
- "prometheus",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tower 0.4.13",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2078,6 +2037,47 @@ name = "litemap"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
+
+[[package]]
+name = "llm-api-converter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "aws-config",
+ "aws-sdk-bedrockruntime",
+ "aws-sdk-dynamodb",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "axum",
+ "base64 0.22.1",
+ "bollard",
+ "chrono",
+ "clap",
+ "config",
+ "criterion",
+ "dotenvy",
+ "futures",
+ "governor",
+ "jsonwebtoken",
+ "moka",
+ "prometheus",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tower 0.4.13",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "validator",
+]
 
 [[package]]
 name = "lock_api"

@@ -657,7 +657,6 @@ async fn create_streaming_response(
     // Create the SSE stream
     let stream = async_stream::stream! {
         let message_id = format!("msg_{}", Uuid::new_v4().to_string().replace("-", ""));
-        let mut content_block_index: i32 = 0;
         let mut total_input_tokens: i32 = 0;
         let mut total_output_tokens: i32 = 0;
         let mut stop_reason = "end_turn".to_string();
@@ -695,7 +694,6 @@ async fn create_streaming_response(
 
                         ConverseStreamOutput::ContentBlockStart(block_start) => {
                             let index = block_start.content_block_index();
-                            content_block_index = index;
 
                             // Determine content block type
                             let content_block = if let Some(start) = block_start.start() {
@@ -755,7 +753,6 @@ async fn create_streaming_response(
                                 "index": index
                             });
                             yield Ok(Event::default().event("content_block_stop").data(data.to_string()));
-                            content_block_index = index + 1;
                         }
 
                         ConverseStreamOutput::MessageStop(stop_event) => {

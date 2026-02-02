@@ -130,7 +130,8 @@ pub struct PtcService {
     session_timeout: u64,
     /// Max iterations per session
     max_iterations: u32,
-    /// Tool call batch window
+    /// Tool call batch window (reserved for future use)
+    #[allow(dead_code)]
     batch_window_ms: u64,
 }
 

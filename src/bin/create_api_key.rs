@@ -4,6 +4,7 @@
 //!   cargo run --bin create_api_key -- --user-id dev-user --name "Development Key"
 
 use anyhow::Result;
+use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::Utc;
 use clap::Parser;
@@ -55,7 +56,7 @@ async fn main() -> Result<()> {
     let created_at = Utc::now().timestamp();
 
     // Configure AWS SDK
-    let mut config_builder = aws_config::from_env();
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest());
 
     // Check for endpoint URL from args or environment
     let endpoint_url = args.endpoint_url

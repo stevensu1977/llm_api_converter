@@ -7,6 +7,7 @@
 //!   DYNAMODB_ENDPOINT_URL=http://localhost:8001 cargo run --bin setup_tables
 
 use anyhow::Result;
+use aws_config::BehaviorVersion;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
 };
@@ -34,7 +35,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Configure AWS SDK
-    let mut config_builder = aws_config::from_env();
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest());
 
     // Check for endpoint URL from args or environment
     let endpoint_url = args

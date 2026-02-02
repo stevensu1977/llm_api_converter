@@ -79,10 +79,10 @@ if [[ "$(uname)" == "Darwin" ]]; then
         exit 1
     fi
 
-    cargo zigbuild --release --target ${RUST_TARGET}
+    cargo zigbuild --release --target ${RUST_TARGET} --bin llm-api-converter
 else
     # Native Linux build
-    cargo build --release --target ${RUST_TARGET}
+    cargo build --release --target ${RUST_TARGET} --bin llm-api-converter
 fi
 
 # Build lightweight Docker image with pre-built binary

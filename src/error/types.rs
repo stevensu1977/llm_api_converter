@@ -13,6 +13,9 @@ pub enum ApiError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
 
@@ -35,6 +38,11 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized(msg) => (
                 StatusCode::UNAUTHORIZED,
                 "authentication_error",
+                msg,
+            ),
+            ApiError::Forbidden(msg) => (
+                StatusCode::FORBIDDEN,
+                "forbidden_error",
                 msg,
             ),
             ApiError::RateLimitExceeded => (

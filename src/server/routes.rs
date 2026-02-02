@@ -2,12 +2,20 @@
 //!
 //! This module defines all HTTP routes for the application.
 
-use axum::{middleware, routing::{get, post}, Router};
+use axum::{
+    body::Body,
+    http::Request,
+    middleware,
+    response::Response,
+    routing::{get, post},
+    Router,
+};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::api::{chat_completions, event_logging, health, messages, models};
+use crate::error::ApiError;
 use crate::middleware::{
-    auth::{require_api_key, AuthState},
+    auth::{extract_api_key, require_api_key, AuthState},
     logging::log_request,
     rate_limit::{rate_limit, RateLimitState},
 };
@@ -65,6 +73,9 @@ pub fn create_router(state: AppState) -> Router {
             require_api_key,
         ));
 
+    // Clone settings for fallback handler
+    let settings_for_fallback = state.settings.clone();
+
     // Combine all routes
     // Both Anthropic and OpenAI routes are under /v1
     Router::new()
@@ -72,11 +83,31 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/v1", openai_routes)
         .nest("/api/event_logging", event_logging_routes)
         .merge(health_routes)
+        // Fallback handler for unknown routes: check API key, return 401 or 403
+        .fallback(move |request: Request<Body>| async move {
+            fallback_handler(request, settings_for_fallback.require_api_key)
+        })
         // Apply middleware layers (order matters: first added = outermost = runs first)
         .layer(create_cors_layer())
         // Custom request logging with trace IDs
         .layer(middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/// Fallback handler for unknown routes
+///
+/// Returns 401 if no API key is provided, 403 if route doesn't exist
+fn fallback_handler<B>(request: Request<B>, require_api_key: bool) -> Result<Response, ApiError> {
+    // If auth is required, check for API key first
+    if require_api_key {
+        if extract_api_key(&request).is_none() {
+            return Err(ApiError::Unauthorized(
+                "Missing API key. Include 'x-api-key' or 'Authorization: Bearer <key>' header in your request.".to_string()
+            ));
+        }
+    }
+    // API key exists (or not required), but route doesn't exist -> 403
+    Err(ApiError::Forbidden("Access denied. The requested endpoint does not exist.".to_string()))
 }
 
 /// Create CORS layer with permissive settings for development

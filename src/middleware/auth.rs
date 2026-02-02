@@ -306,6 +306,27 @@ pub fn get_api_key_info<B>(request: &Request<B>) -> Option<&ApiKeyInfo> {
     request.extensions().get::<ApiKeyInfo>()
 }
 
+/// Extract API key from request headers
+///
+/// Supports both `x-api-key` (Anthropic style) and `Authorization: Bearer` (OpenAI style).
+/// Returns None if no API key is found.
+pub fn extract_api_key<B>(request: &Request<B>) -> Option<String> {
+    request
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Try Authorization: Bearer <token> format (OpenAI style)
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .map(|s| s.to_string())
+        })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

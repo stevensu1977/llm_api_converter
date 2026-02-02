@@ -2,8 +2,10 @@
 # Docker Build Ignore File
 # =============================================================================
 
-# Build artifacts
+# Build artifacts (keep release binary for prebuilt Dockerfile)
 target/
+!target/release/llm-api-converter
+!target/*/release/llm-api-converter
 *.rs.bk
 
 # IDE & Editor files

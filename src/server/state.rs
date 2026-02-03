@@ -5,7 +5,7 @@
 
 use crate::config::{create_bedrock_client, create_dynamodb_client, Settings};
 use crate::db::DynamoDbClient;
-use crate::services::{BedrockService, PtcService, UsageTracker};
+use crate::services::{BedrockService, GeminiConfig as GeminiServiceConfig, GeminiService, PtcService, UsageTracker};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -32,6 +32,9 @@ pub struct AppState {
 
     /// PTC service for Programmatic Tool Calling (optional)
     pub ptc_service: Option<Arc<PtcService>>,
+
+    /// Gemini service for Google Gemini API (optional)
+    pub gemini_service: Option<Arc<GeminiService>>,
 }
 
 impl AppState {
@@ -77,6 +80,30 @@ impl AppState {
             None
         };
 
+        // Initialize Gemini service if enabled
+        let gemini_service = if settings.gemini.is_available() {
+            tracing::info!("Gemini enabled, initializing Gemini service");
+            let gemini_config = GeminiServiceConfig::new(
+                settings.gemini.api_key.clone().unwrap_or_default(),
+            );
+            let gemini_config = if let Some(ref base_url) = settings.gemini.base_url {
+                gemini_config.with_base_url(base_url)
+            } else {
+                gemini_config
+            };
+
+            match GeminiService::new(gemini_config) {
+                Ok(service) => Some(Arc::new(service)),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize Gemini service: {}. Gemini will be disabled.", e);
+                    None
+                }
+            }
+        } else {
+            tracing::debug!("Gemini disabled or no API key configured");
+            None
+        };
+
         tracing::info!("Application state initialized successfully");
 
         Ok(Self {
@@ -86,6 +113,7 @@ impl AppState {
             usage_tracker,
             start_time,
             ptc_service,
+            gemini_service,
         })
     }
 
@@ -104,30 +132,41 @@ impl AppState {
         self.settings.require_api_key
     }
 
+    /// Check if Gemini is available
+    pub fn is_gemini_available(&self) -> bool {
+        self.gemini_service.is_some()
+    }
+
     /// Check the health of AWS services
     ///
     /// Returns a struct with the health status of DynamoDB and Bedrock.
     pub async fn check_aws_health(&self) -> AwsHealthStatus {
         let dynamodb_healthy = self.dynamodb.health_check().await;
         let bedrock_healthy = self.bedrock.health_check();
+        let gemini_healthy = self.gemini_service
+            .as_ref()
+            .map(|s| s.health_check())
+            .unwrap_or(false);
 
         AwsHealthStatus {
             dynamodb: dynamodb_healthy,
             bedrock: bedrock_healthy,
+            gemini: gemini_healthy,
         }
     }
 }
 
-/// Health status of AWS services
+/// Health status of backend services
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AwsHealthStatus {
     pub dynamodb: bool,
     pub bedrock: bool,
+    pub gemini: bool,
 }
 
 impl AwsHealthStatus {
-    /// Check if all AWS services are healthy
+    /// Check if all core services are healthy (DynamoDB + at least one backend)
     pub fn all_healthy(&self) -> bool {
-        self.dynamodb && self.bedrock
+        self.dynamodb && (self.bedrock || self.gemini)
     }
 }

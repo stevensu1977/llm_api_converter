@@ -10,5 +10,5 @@ pub use aws::{
     build_aws_config, create_bedrock_client, create_dynamodb_client, AwsConfigBuilder,
 };
 pub use settings::{
-    Environment, FeatureFlags, PtcConfig, RateLimitConfig, Settings,
+    Environment, FeatureFlags, GeminiConfig, PtcConfig, RateLimitConfig, Settings,
 };

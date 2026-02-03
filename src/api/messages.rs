@@ -1,8 +1,8 @@
 //! Messages API endpoint
 //!
 //! This module implements the POST /v1/messages endpoint for the Anthropic Messages API.
-//! It handles request conversion, Bedrock Converse API calls, and response conversion.
-//! Supports both streaming and non-streaming responses using the Converse API.
+//! It handles request conversion, Bedrock/Gemini API calls, and response conversion.
+//! Supports both streaming and non-streaming responses using the Converse API or Gemini API.
 
 use aws_sdk_bedrockruntime::types::{
     ContentBlock as SdkContentBlock, ConversationRole, ConverseStreamOutput,
@@ -25,7 +25,9 @@ use std::convert::Infallible;
 use std::time::Instant;
 use uuid::Uuid;
 
-use crate::converters::ConversionError;
+use crate::converters::{
+    AnthropicToGeminiConverter, ConversionError, GeminiToAnthropicConverter,
+};
 use crate::schemas::anthropic::{
     ContentBlock, ErrorResponse, Message, MessageContent, MessageRequest, MessageResponse,
     StopReason, SystemContent, ToolResultValue, Usage,
@@ -33,6 +35,34 @@ use crate::schemas::anthropic::{
 use crate::server::state::AppState;
 use crate::services::{BedrockError, ConverseRequest};
 use crate::utils::truncate_str;
+
+// ============================================================================
+// Backend Selection
+// ============================================================================
+
+/// Backend type for API requests
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Bedrock,
+    Gemini,
+}
+
+/// Determine which backend to use based on model name and availability
+fn select_backend(state: &AppState, model: &str) -> Backend {
+    // Check if model explicitly requests Gemini
+    if model.starts_with("gemini-") {
+        if state.is_gemini_available() {
+            return Backend::Gemini;
+        }
+        // Fall back to Bedrock if Gemini not available
+        tracing::warn!(
+            model = %model,
+            "Gemini model requested but Gemini service not available, falling back to Bedrock"
+        );
+    }
+
+    Backend::Bedrock
+}
 
 // ============================================================================
 // Error Types
@@ -146,8 +176,8 @@ impl IntoResponse for MessageApiResponse {
 
 /// POST /v1/messages - Create a message
 ///
-/// This endpoint accepts Anthropic Messages API requests, converts them to Bedrock format,
-/// calls the Bedrock Converse/ConverseStream API, and returns the response in Anthropic format.
+/// This endpoint accepts Anthropic Messages API requests, converts them to Bedrock or Gemini format,
+/// calls the appropriate backend API, and returns the response in Anthropic format.
 ///
 /// Supports both streaming and non-streaming responses.
 pub async fn create_message(
@@ -158,13 +188,13 @@ pub async fn create_message(
     let start_time = Instant::now();
     let request_id = Uuid::new_v4().to_string();
 
-    // Get the Bedrock model ID early for logging
-    let bedrock_model = state.bedrock.get_bedrock_model_id(&request.model);
+    // Determine which backend to use
+    let backend = select_backend(&state, &request.model);
 
     tracing::info!(
         request_id = %request_id,
         model = %request.model,
-        bedrock_model = %bedrock_model,
+        backend = ?backend,
         message_count = request.messages.len(),
         max_tokens = request.max_tokens,
         stream = request.stream,
@@ -182,12 +212,38 @@ pub async fn create_message(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    // Build Converse request (uses the same model mapping)
-    let converse_request = build_converse_request(&state, &request)?;
+    // Route to appropriate backend
+    match backend {
+        Backend::Gemini => {
+            handle_gemini_request(&state, &request, &request_id, start_time).await
+        }
+        Backend::Bedrock => {
+            handle_bedrock_request(&state, &request, &request_id, start_time).await
+        }
+    }
+}
+
+/// Handle request using Bedrock backend
+async fn handle_bedrock_request(
+    state: &AppState,
+    request: &MessageRequest,
+    request_id: &str,
+    start_time: Instant,
+) -> Result<MessageApiResponse, ApiError> {
+    let bedrock_model = state.bedrock.get_bedrock_model_id(&request.model);
+
+    tracing::debug!(
+        request_id = %request_id,
+        bedrock_model = %bedrock_model,
+        "Routing to Bedrock backend"
+    );
+
+    // Build Converse request
+    let converse_request = build_converse_request(state, request)?;
 
     // Handle streaming vs non-streaming
     if request.stream {
-        let sse_stream = create_streaming_response(&state, converse_request, &request_id, &request.model, &bedrock_model).await?;
+        let sse_stream = create_streaming_response(state, converse_request, request_id, &request.model, &bedrock_model).await?;
         return Ok(MessageApiResponse::Stream(sse_stream));
     }
 
@@ -214,7 +270,73 @@ pub async fn create_message(
         output_tokens = response.usage.output_tokens,
         stop_reason = ?response.stop_reason,
         duration_ms = duration_ms,
-        "Request completed successfully"
+        "Bedrock request completed successfully"
+    );
+
+    Ok(MessageApiResponse::Json(Json(response)))
+}
+
+/// Handle request using Gemini backend
+async fn handle_gemini_request(
+    state: &AppState,
+    request: &MessageRequest,
+    request_id: &str,
+    start_time: Instant,
+) -> Result<MessageApiResponse, ApiError> {
+    let gemini_service = state.gemini_service.as_ref().ok_or_else(|| {
+        ApiError::internal_error("Gemini service not available")
+    })?;
+
+    // Convert Anthropic request to Gemini format
+    let converter = AnthropicToGeminiConverter::new();
+    let (gemini_model, gemini_request) = converter
+        .convert_request(request)
+        .map_err(|e| ApiError::bad_request(format!("Request conversion error: {}", e)))?;
+
+    tracing::debug!(
+        request_id = %request_id,
+        gemini_model = %gemini_model,
+        "Routing to Gemini backend"
+    );
+
+    // Handle streaming vs non-streaming
+    if request.stream {
+        let sse_stream = create_gemini_streaming_response(
+            gemini_service.clone(),
+            &gemini_model,
+            gemini_request,
+            request_id,
+            &request.model,
+        ).await?;
+        return Ok(MessageApiResponse::Stream(sse_stream));
+    }
+
+    // Non-streaming response
+    let gemini_response = gemini_service
+        .generate_content(&gemini_model, &gemini_request)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Gemini API call failed");
+            ApiError::internal_error(format!("Gemini API error: {}", e))
+        })?;
+
+    // Convert Gemini response to Anthropic format
+    let response_converter = GeminiToAnthropicConverter::new();
+    let response = response_converter
+        .convert_response(&gemini_response, &request.model)
+        .map_err(|e| ApiError::internal_error(format!("Response conversion error: {}", e)))?;
+
+    let duration_ms = start_time.elapsed().as_millis();
+
+    tracing::info!(
+        request_id = %request_id,
+        model = %response.model,
+        gemini_model = %gemini_model,
+        input_tokens = response.usage.input_tokens,
+        output_tokens = response.usage.output_tokens,
+        stop_reason = ?response.stop_reason,
+        duration_ms = duration_ms,
+        "Gemini request completed successfully"
     );
 
     Ok(MessageApiResponse::Json(Json(response)))
@@ -827,6 +949,169 @@ async fn create_streaming_response(
             output_tokens = total_output_tokens,
             stop_reason = %stop_reason,
             "Streaming response completed"
+        );
+    };
+
+    Ok(Sse::new(Box::pin(stream)))
+}
+
+/// Create a streaming response using SSE with Gemini API
+async fn create_gemini_streaming_response(
+    gemini_service: std::sync::Arc<crate::services::GeminiService>,
+    gemini_model: &str,
+    gemini_request: crate::schemas::gemini::GeminiRequest,
+    request_id: &str,
+    original_model: &str,
+) -> Result<Sse<std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>, ApiError>
+{
+    let mut stream_response = gemini_service
+        .generate_content_stream(gemini_model, &gemini_request)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Gemini stream API call failed");
+            ApiError::internal_error(format!("Gemini API error: {}", e))
+        })?;
+
+    let model_id = original_model.to_string();
+    let gemini_model_id = gemini_model.to_string();
+    let req_id = request_id.to_string();
+    let converter = GeminiToAnthropicConverter::new();
+
+    let stream = async_stream::stream! {
+        let message_id = format!("msg_{}", Uuid::new_v4().to_string().replace("-", ""));
+        let mut total_input_tokens: i32 = 0;
+        let mut total_output_tokens: i32 = 0;
+        let mut stop_reason = "end_turn".to_string();
+        let mut content_block_started = false;
+
+        tracing::debug!(request_id = %req_id, "Starting Gemini SSE stream");
+
+        // Emit message_start event
+        let message_start_data = serde_json::json!({
+            "type": "message_start",
+            "message": {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model_id,
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0
+                }
+            }
+        });
+        yield Ok(Event::default().event("message_start").data(message_start_data.to_string()));
+
+        // Process Gemini stream events
+        loop {
+            match stream_response.recv().await {
+                Ok(Some(chunk)) => {
+                    // Convert chunk using the converter
+                    match converter.convert_stream_chunk(&chunk) {
+                        Ok((text_delta, finish_reason_opt)) => {
+                            // Emit content block start if this is the first text
+                            if text_delta.is_some() && !content_block_started {
+                                content_block_started = true;
+                                let start_data = serde_json::json!({
+                                    "type": "content_block_start",
+                                    "index": 0,
+                                    "content_block": {"type": "text", "text": ""}
+                                });
+                                yield Ok(Event::default().event("content_block_start").data(start_data.to_string()));
+                            }
+
+                            // Emit text delta
+                            if let Some(text) = text_delta {
+                                let delta_data = serde_json::json!({
+                                    "type": "content_block_delta",
+                                    "index": 0,
+                                    "delta": {"type": "text_delta", "text": text}
+                                });
+                                yield Ok(Event::default().event("content_block_delta").data(delta_data.to_string()));
+                            }
+
+                            // Check for finish reason
+                            if let Some(reason) = finish_reason_opt {
+                                stop_reason = match reason {
+                                    StopReason::EndTurn => "end_turn".to_string(),
+                                    StopReason::MaxTokens => "max_tokens".to_string(),
+                                    StopReason::StopSequence => "stop_sequence".to_string(),
+                                    StopReason::ToolUse => "tool_use".to_string(),
+                                };
+                            }
+
+                            // Update usage if available
+                            if let Some(usage) = chunk.usage_metadata {
+                                total_input_tokens = usage.prompt_token_count;
+                                total_output_tokens = usage.candidates_token_count;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(request_id = %req_id, error = %e, "Failed to convert stream chunk");
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // Stream ended
+                    tracing::debug!(request_id = %req_id, "Gemini stream ended");
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!(request_id = %req_id, error = %e, "Gemini stream error");
+                    let error_data = serde_json::json!({
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": e.to_string()
+                        }
+                    });
+                    yield Ok(Event::default()
+                        .event("error")
+                        .data(error_data.to_string()));
+                    break;
+                }
+            }
+        }
+
+        // Emit content block stop if we started one
+        if content_block_started {
+            let stop_data = serde_json::json!({
+                "type": "content_block_stop",
+                "index": 0
+            });
+            yield Ok(Event::default().event("content_block_stop").data(stop_data.to_string()));
+        }
+
+        // Emit message_delta with final usage
+        let message_delta_data = serde_json::json!({
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": stop_reason,
+                "stop_sequence": null
+            },
+            "usage": {
+                "output_tokens": total_output_tokens
+            }
+        });
+        yield Ok(Event::default().event("message_delta").data(message_delta_data.to_string()));
+
+        // Emit message_stop event
+        let message_stop_data = serde_json::json!({
+            "type": "message_stop"
+        });
+        yield Ok(Event::default().event("message_stop").data(message_stop_data.to_string()));
+
+        tracing::info!(
+            request_id = %req_id,
+            model = %model_id,
+            gemini_model = %gemini_model_id,
+            input_tokens = total_input_tokens,
+            output_tokens = total_output_tokens,
+            stop_reason = %stop_reason,
+            "Gemini streaming response completed"
         );
     };
 

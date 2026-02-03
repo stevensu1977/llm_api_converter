@@ -113,6 +113,38 @@ impl Default for PtcConfig {
     }
 }
 
+/// Google Gemini API configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GeminiConfig {
+    /// Enable Gemini backend
+    pub enabled: bool,
+    /// Gemini API key (from GEMINI_API_KEY env)
+    #[serde(skip_serializing)]
+    pub api_key: Option<String>,
+    /// Base URL for Gemini API (default: generativelanguage.googleapis.com)
+    pub base_url: Option<String>,
+    /// Request timeout in seconds
+    pub timeout_seconds: u64,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            base_url: None,
+            timeout_seconds: 120,
+        }
+    }
+}
+
+impl GeminiConfig {
+    /// Check if Gemini is enabled and has API key configured
+    pub fn is_available(&self) -> bool {
+        self.enabled && self.api_key.is_some()
+    }
+}
+
 /// Main application settings
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Settings {
@@ -155,6 +187,9 @@ pub struct Settings {
 
     // PTC configuration
     pub ptc: PtcConfig,
+
+    // Gemini configuration
+    pub gemini: GeminiConfig,
 
     // Model mapping (Anthropic model ID -> Bedrock model ID)
     pub default_model_mapping: HashMap<String, String>,
@@ -274,6 +309,18 @@ impl Settings {
                 network_disabled: env_or_default("PTC_NETWORK_DISABLED", "true")
                     .parse()
                     .unwrap_or(true),
+            },
+
+            // Gemini configuration
+            gemini: GeminiConfig {
+                enabled: env_or_default("GEMINI_ENABLED", "false")
+                    .parse()
+                    .unwrap_or(false),
+                api_key: env::var("GEMINI_API_KEY").ok(),
+                base_url: env::var("GEMINI_BASE_URL").ok(),
+                timeout_seconds: env_or_default("GEMINI_TIMEOUT_SECONDS", "120")
+                    .parse()
+                    .unwrap_or(120),
             },
 
             // Model mapping - load default mappings
@@ -500,6 +547,7 @@ impl Default for Settings {
             rate_limit: RateLimitConfig::default(),
             features: FeatureFlags::default(),
             ptc: PtcConfig::default(),
+            gemini: GeminiConfig::default(),
             default_model_mapping: Self::load_default_model_mapping(),
             streaming_timeout_seconds: 300,
             print_prompts: false,

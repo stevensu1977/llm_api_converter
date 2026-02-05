@@ -97,6 +97,40 @@ pub async fn create_bedrock_client(settings: &Settings) -> BedrockRuntimeClient 
     AwsConfigBuilder::new(settings).build_bedrock_client().await
 }
 
+/// Create a Bedrock Runtime client with a specific profile and region
+///
+/// This is used for multi-profile support where different AWS profiles
+/// are used for load balancing and cost distribution.
+pub async fn create_bedrock_client_with_profile(
+    profile: Option<&str>,
+    region: &str,
+    endpoint_url: Option<&str>,
+) -> BedrockRuntimeClient {
+    let region = Region::new(region.to_string());
+
+    // Build config with optional profile
+    let config_loader = if let Some(profile_name) = profile {
+        tracing::debug!(profile = %profile_name, region = %region, "Creating Bedrock client with profile");
+        aws_config::defaults(BehaviorVersion::latest())
+            .region(region)
+            .profile_name(profile_name)
+    } else {
+        tracing::debug!(region = %region, "Creating Bedrock client with default credentials");
+        aws_config::defaults(BehaviorVersion::latest()).region(region)
+    };
+
+    let sdk_config = config_loader.load().await;
+
+    if let Some(endpoint) = endpoint_url {
+        let bedrock_config = aws_sdk_bedrockruntime::config::Builder::from(&sdk_config)
+            .endpoint_url(endpoint)
+            .build();
+        BedrockRuntimeClient::from_conf(bedrock_config)
+    } else {
+        BedrockRuntimeClient::new(&sdk_config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

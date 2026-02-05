@@ -964,7 +964,7 @@ async fn create_gemini_streaming_response(
     original_model: &str,
 ) -> Result<Sse<std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>, ApiError>
 {
-    let mut stream_response = gemini_service
+    let (mut stream_response, credential_name) = gemini_service
         .generate_content_stream(gemini_model, &gemini_request)
         .await
         .map_err(|e| {
@@ -976,6 +976,8 @@ async fn create_gemini_streaming_response(
     let gemini_model_id = gemini_model.to_string();
     let req_id = request_id.to_string();
     let converter = GeminiToAnthropicConverter::new();
+    let gemini_service_clone = gemini_service.clone();
+    let cred_name = credential_name.clone();
 
     let stream = async_stream::stream! {
         let message_id = format!("msg_{}", Uuid::new_v4().to_string().replace("-", ""));
@@ -983,6 +985,7 @@ async fn create_gemini_streaming_response(
         let mut total_output_tokens: i32 = 0;
         let mut stop_reason = "end_turn".to_string();
         let mut content_block_started = false;
+        let mut stream_error = false;
 
         tracing::debug!(request_id = %req_id, "Starting Gemini SSE stream");
 
@@ -1060,6 +1063,7 @@ async fn create_gemini_streaming_response(
                     break;
                 }
                 Err(e) => {
+                    stream_error = true;
                     tracing::error!(request_id = %req_id, error = %e, "Gemini stream error");
                     let error_data = serde_json::json!({
                         "type": "error",
@@ -1104,13 +1108,22 @@ async fn create_gemini_streaming_response(
         });
         yield Ok(Event::default().event("message_stop").data(message_stop_data.to_string()));
 
+        // Record success or failure for the credential
+        if stream_error {
+            gemini_service_clone.record_failure(&cred_name);
+        } else {
+            gemini_service_clone.record_success(&cred_name);
+        }
+
         tracing::info!(
             request_id = %req_id,
             model = %model_id,
             gemini_model = %gemini_model_id,
+            credential = %cred_name,
             input_tokens = total_input_tokens,
             output_tokens = total_output_tokens,
             stop_reason = %stop_reason,
+            stream_error = stream_error,
             "Gemini streaming response completed"
         );
     };

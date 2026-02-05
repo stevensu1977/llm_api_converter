@@ -7,8 +7,10 @@ pub mod aws;
 pub mod settings;
 
 pub use aws::{
-    build_aws_config, create_bedrock_client, create_dynamodb_client, AwsConfigBuilder,
+    build_aws_config, create_bedrock_client, create_bedrock_client_with_profile,
+    create_dynamodb_client, AwsConfigBuilder,
 };
 pub use settings::{
-    Environment, FeatureFlags, GeminiConfig, PtcConfig, RateLimitConfig, Settings,
+    BackendPoolConfig, BedrockConfig, BedrockProfileConfig, Environment, FeatureFlags,
+    GeminiConfig, PtcConfig, RateLimitConfig, Settings,
 };

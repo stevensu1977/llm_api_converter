@@ -5,7 +5,7 @@
 
 use crate::config::{create_bedrock_client, create_dynamodb_client, Settings};
 use crate::db::DynamoDbClient;
-use crate::services::{BedrockService, GeminiConfig as GeminiServiceConfig, GeminiService, PtcService, UsageTracker};
+use crate::services::{BedrockService, GeminiConfig as GeminiServiceConfig, GeminiService, LoadBalanceStrategy, PtcService, UsageTracker};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -59,6 +59,15 @@ impl AppState {
         let dynamodb = Arc::new(DynamoDbClient::new(settings.clone(), dynamodb_sdk_client));
 
         tracing::debug!("Creating Bedrock client");
+        // Check if multiple Bedrock profiles are configured
+        if settings.bedrock.has_multiple_profiles() {
+            tracing::warn!(
+                profile_count = settings.bedrock.profiles.len(),
+                "Multiple Bedrock profiles configured via BEDROCK_PROFILES. \
+                Multi-profile load balancing is not yet fully implemented. \
+                Using default credentials for now."
+            );
+        }
         let bedrock_sdk_client = create_bedrock_client(&settings).await;
         let bedrock = Arc::new(BedrockService::new(settings.clone(), bedrock_sdk_client));
 
@@ -82,18 +91,37 @@ impl AppState {
 
         // Initialize Gemini service if enabled
         let gemini_service = if settings.gemini.is_available() {
-            tracing::info!("Gemini enabled, initializing Gemini service");
-            let gemini_config = GeminiServiceConfig::new(
-                settings.gemini.api_key.clone().unwrap_or_default(),
+            let api_keys = settings.gemini.get_all_keys();
+            tracing::info!(
+                key_count = api_keys.len(),
+                "Gemini enabled, initializing Gemini service with multi-key support"
             );
-            let gemini_config = if let Some(ref base_url) = settings.gemini.base_url {
-                gemini_config.with_base_url(base_url)
-            } else {
-                gemini_config
-            };
+
+            // Create Gemini config with all keys
+            let mut gemini_config = GeminiServiceConfig::with_keys(api_keys)
+                .with_timeout(settings.gemini.timeout_seconds);
+
+            // Apply base URL if specified
+            if let Some(ref base_url) = settings.gemini.base_url {
+                gemini_config = gemini_config.with_base_url(base_url);
+            }
+
+            // Apply load balancing settings from backend_pool config
+            let strategy = LoadBalanceStrategy::from_str(&settings.backend_pool.strategy);
+            gemini_config = gemini_config
+                .with_strategy(strategy)
+                .with_max_failures(settings.backend_pool.max_failures)
+                .with_retry_after(settings.backend_pool.retry_after_secs);
 
             match GeminiService::new(gemini_config) {
-                Ok(service) => Some(Arc::new(service)),
+                Ok(service) => {
+                    tracing::info!(
+                        healthy_keys = service.healthy_key_count(),
+                        strategy = %strategy,
+                        "Gemini service initialized successfully"
+                    );
+                    Some(Arc::new(service))
+                }
                 Err(e) => {
                     tracing::warn!("Failed to initialize Gemini service: {}. Gemini will be disabled.", e);
                     None

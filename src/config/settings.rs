@@ -113,14 +113,41 @@ impl Default for PtcConfig {
     }
 }
 
+/// Backend pool configuration for load balancing
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackendPoolConfig {
+    /// Load balance strategy: round_robin, weighted, random, failover
+    pub strategy: String,
+    /// Maximum failures before disabling a credential
+    pub max_failures: u32,
+    /// Seconds to wait before retrying a disabled credential
+    pub retry_after_secs: u64,
+    /// Health check interval in seconds
+    pub health_check_interval_secs: u64,
+}
+
+impl Default for BackendPoolConfig {
+    fn default() -> Self {
+        Self {
+            strategy: "round_robin".to_string(),
+            max_failures: 3,
+            retry_after_secs: 300,
+            health_check_interval_secs: 30,
+        }
+    }
+}
+
 /// Google Gemini API configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeminiConfig {
     /// Enable Gemini backend
     pub enabled: bool,
-    /// Gemini API key (from GEMINI_API_KEY env)
+    /// Single API key (backward compatible, from GEMINI_API_KEY env)
     #[serde(skip_serializing)]
     pub api_key: Option<String>,
+    /// Multiple API keys (from GEMINI_API_KEYS env, comma-separated)
+    #[serde(skip_serializing)]
+    pub api_keys: Vec<String>,
     /// Base URL for Gemini API (default: generativelanguage.googleapis.com)
     pub base_url: Option<String>,
     /// Request timeout in seconds
@@ -132,6 +159,7 @@ impl Default for GeminiConfig {
         Self {
             enabled: false,
             api_key: None,
+            api_keys: Vec::new(),
             base_url: None,
             timeout_seconds: 120,
         }
@@ -139,9 +167,57 @@ impl Default for GeminiConfig {
 }
 
 impl GeminiConfig {
-    /// Check if Gemini is enabled and has API key configured
+    /// Check if Gemini is enabled and has at least one API key configured
     pub fn is_available(&self) -> bool {
-        self.enabled && self.api_key.is_some()
+        self.enabled && (self.api_key.is_some() || !self.api_keys.is_empty())
+    }
+
+    /// Get all available API keys (combines single key and multi-key configs)
+    pub fn get_all_keys(&self) -> Vec<String> {
+        let mut keys = self.api_keys.clone();
+        // Add single key if not already in the list
+        if let Some(ref key) = self.api_key {
+            if !keys.contains(key) {
+                keys.insert(0, key.clone());
+            }
+        }
+        keys
+    }
+}
+
+/// AWS Bedrock configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BedrockConfig {
+    /// Multiple profiles (from BEDROCK_PROFILES env, format: profile:region,profile:region)
+    #[serde(skip_serializing)]
+    pub profiles: Vec<BedrockProfileConfig>,
+}
+
+impl Default for BedrockConfig {
+    fn default() -> Self {
+        Self {
+            profiles: Vec::new(),
+        }
+    }
+}
+
+/// Single Bedrock profile configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BedrockProfileConfig {
+    pub name: String,
+    pub region: String,
+    pub profile: Option<String>,
+    #[serde(skip_serializing)]
+    pub access_key_id: Option<String>,
+    #[serde(skip_serializing)]
+    pub secret_access_key: Option<String>,
+    pub weight: u32,
+}
+
+impl BedrockConfig {
+    /// Check if multiple profiles are configured
+    pub fn has_multiple_profiles(&self) -> bool {
+        self.profiles.len() > 1
     }
 }
 
@@ -188,8 +264,14 @@ pub struct Settings {
     // PTC configuration
     pub ptc: PtcConfig,
 
+    // Backend pool configuration (load balancing)
+    pub backend_pool: BackendPoolConfig,
+
     // Gemini configuration
     pub gemini: GeminiConfig,
+
+    // Bedrock multi-profile configuration
+    pub bedrock: BedrockConfig,
 
     // Model mapping (Anthropic model ID -> Bedrock model ID)
     pub default_model_mapping: HashMap<String, String>,
@@ -311,16 +393,36 @@ impl Settings {
                     .unwrap_or(true),
             },
 
+            // Backend pool configuration (load balancing)
+            backend_pool: BackendPoolConfig {
+                strategy: env_or_default("BACKEND_LOAD_BALANCE_STRATEGY", "round_robin"),
+                max_failures: env_or_default("BACKEND_MAX_FAILURES", "3")
+                    .parse()
+                    .unwrap_or(3),
+                retry_after_secs: env_or_default("BACKEND_RETRY_AFTER_SECS", "300")
+                    .parse()
+                    .unwrap_or(300),
+                health_check_interval_secs: env_or_default("BACKEND_HEALTH_CHECK_INTERVAL_SECS", "30")
+                    .parse()
+                    .unwrap_or(30),
+            },
+
             // Gemini configuration
             gemini: GeminiConfig {
                 enabled: env_or_default("GEMINI_ENABLED", "false")
                     .parse()
                     .unwrap_or(false),
                 api_key: env::var("GEMINI_API_KEY").ok(),
+                api_keys: parse_comma_separated_env("GEMINI_API_KEYS"),
                 base_url: env::var("GEMINI_BASE_URL").ok(),
                 timeout_seconds: env_or_default("GEMINI_TIMEOUT_SECONDS", "120")
                     .parse()
                     .unwrap_or(120),
+            },
+
+            // Bedrock multi-profile configuration
+            bedrock: BedrockConfig {
+                profiles: parse_bedrock_profiles(),
             },
 
             // Model mapping - load default mappings
@@ -547,7 +649,9 @@ impl Default for Settings {
             rate_limit: RateLimitConfig::default(),
             features: FeatureFlags::default(),
             ptc: PtcConfig::default(),
+            backend_pool: BackendPoolConfig::default(),
             gemini: GeminiConfig::default(),
+            bedrock: BedrockConfig::default(),
             default_model_mapping: Self::load_default_model_mapping(),
             streaming_timeout_seconds: 300,
             print_prompts: false,
@@ -569,6 +673,65 @@ impl Settings {
 /// Helper function to get environment variable with default
 fn env_or_default(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Parse comma-separated environment variable into Vec<String>
+fn parse_comma_separated_env(key: &str) -> Vec<String> {
+    env::var(key)
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse BEDROCK_PROFILES environment variable
+/// Format: "profile1:region1,profile2:region2" or "name1=profile1:region1,name2=profile2:region2"
+fn parse_bedrock_profiles() -> Vec<BedrockProfileConfig> {
+    let profiles_str = match env::var("BEDROCK_PROFILES") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return Vec::new(),
+    };
+
+    profiles_str
+        .split(',')
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+
+            // Check for name=profile:region format
+            let (name, profile_region) = if entry.contains('=') {
+                let parts: Vec<&str> = entry.splitn(2, '=').collect();
+                (parts[0].to_string(), parts.get(1).unwrap_or(&"").to_string())
+            } else {
+                (format!("profile_{}", idx + 1), entry.to_string())
+            };
+
+            // Parse profile:region
+            let parts: Vec<&str> = profile_region.splitn(2, ':').collect();
+            if parts.len() < 2 {
+                tracing::warn!(
+                    "Invalid BEDROCK_PROFILES entry: {}. Expected format: profile:region",
+                    entry
+                );
+                return None;
+            }
+
+            Some(BedrockProfileConfig {
+                name,
+                profile: Some(parts[0].to_string()),
+                region: parts[1].to_string(),
+                access_key_id: None,
+                secret_access_key: None,
+                weight: 1,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

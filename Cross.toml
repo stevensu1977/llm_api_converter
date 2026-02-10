@@ -21,6 +21,4 @@ pre-build = [
 ]
 
 [target.aarch64-unknown-linux-gnu.env]
-passthrough = ["AWS_LC_SYS_CMAKE_BUILDER"]
-CC = "clang"
-CXX = "clang++"
+passthrough = ["AWS_LC_SYS_CMAKE_BUILDER", "CC", "CXX"]

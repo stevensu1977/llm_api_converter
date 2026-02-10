@@ -148,6 +148,46 @@ Authorization: Bearer your-api-key
 GET /health
 ```
 
+## Client Configuration
+
+### Claude Code
+
+Configure Claude Code to use this proxy instead of the official Anthropic API:
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=0
+export ANTHROPIC_BASE_URL=<your-proxy-url>        # e.g., https://xxx.us-east-1.awsapprunner.com
+export ANTHROPIC_API_KEY=sk-<your-api-key>        # API key from this proxy
+export ANTHROPIC_MODEL=<model-id>                 # e.g., claude-sonnet-4-20250514
+```
+
+**Example with Bedrock models:**
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=0
+export ANTHROPIC_BASE_URL=https://your-app-runner.us-east-1.awsapprunner.com
+export ANTHROPIC_API_KEY=sk-your-api-key-here
+export ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
+```
+
+**Example with third-party models (via Bedrock):**
+
+```bash
+# Qwen
+export CLAUDE_CODE_USE_BEDROCK=0
+export ANTHROPIC_BASE_URL=https://your-app-runner.us-east-1.awsapprunner.com
+export ANTHROPIC_API_KEY=sk-your-api-key-here
+export ANTHROPIC_MODEL=qwen.qwen3-coder-480b-a35b-v1:0
+
+# DeepSeek
+export CLAUDE_CODE_USE_BEDROCK=0
+export ANTHROPIC_BASE_URL=https://your-app-runner.us-east-1.awsapprunner.com
+export ANTHROPIC_API_KEY=sk-your-api-key-here
+export ANTHROPIC_MODEL=deepseek.deepseek-v3-v1:0
+```
+
+After setting these environment variables, run `claude` to start Claude Code with your configured backend.
+
 ## Architecture
 
 ```

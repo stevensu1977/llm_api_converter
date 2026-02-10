@@ -34,7 +34,7 @@ use crate::schemas::anthropic::{
 };
 use crate::server::state::AppState;
 use crate::services::{BedrockError, ConverseRequest};
-use crate::utils::truncate_str;
+use crate::utils::{truncate_str, ToolNameMapper};
 
 // ============================================================================
 // Backend Selection
@@ -238,12 +238,12 @@ async fn handle_bedrock_request(
         "Routing to Bedrock backend"
     );
 
-    // Build Converse request
-    let converse_request = build_converse_request(state, request)?;
+    // Build Converse request (returns mapper for restoring long tool names)
+    let (converse_request, tool_name_mapper) = build_converse_request(state, request)?;
 
     // Handle streaming vs non-streaming
     if request.stream {
-        let sse_stream = create_streaming_response(state, converse_request, request_id, &request.model, &bedrock_model).await?;
+        let sse_stream = create_streaming_response(state, converse_request, request_id, &request.model, &bedrock_model, tool_name_mapper).await?;
         return Ok(MessageApiResponse::Stream(sse_stream));
     }
 
@@ -257,8 +257,8 @@ async fn handle_bedrock_request(
             ApiError::from_bedrock_error(&e)
         })?;
 
-    // Convert Converse response to Anthropic format
-    let response = convert_converse_response(converse_output, &request.model)?;
+    // Convert Converse response to Anthropic format (restore original tool names)
+    let response = convert_converse_response(converse_output, &request.model, &tool_name_mapper)?;
 
     let duration_ms = start_time.elapsed().as_millis();
 
@@ -347,10 +347,12 @@ async fn handle_gemini_request(
 // ============================================================================
 
 /// Build a Converse request from Anthropic MessageRequest
+///
+/// Returns the ConverseRequest and a ToolNameMapper for restoring long tool names in responses.
 fn build_converse_request(
     state: &AppState,
     request: &MessageRequest,
-) -> Result<ConverseRequest, ApiError> {
+) -> Result<(ConverseRequest, ToolNameMapper), ApiError> {
     let model_id = state.bedrock.get_bedrock_model_id(&request.model);
 
     // Convert messages
@@ -380,10 +382,11 @@ fn build_converse_request(
         converse_req = converse_req.with_system(system_blocks);
     }
 
-    // Convert tools
+    // Convert tools with name mapping for long names
+    let mut tool_name_mapper = ToolNameMapper::new();
     if let Some(ref tools) = request.tools {
         if !tools.is_empty() {
-            let tool_config = convert_tools_to_sdk(tools)?;
+            let tool_config = convert_tools_to_sdk(tools, &mut tool_name_mapper)?;
             converse_req = converse_req.with_tool_config(tool_config);
         }
     }
@@ -404,7 +407,7 @@ fn build_converse_request(
         converse_req = converse_req.with_additional_fields(additional);
     }
 
-    Ok(converse_req)
+    Ok((converse_req, tool_name_mapper))
 }
 
 /// Convert Anthropic messages to SDK messages
@@ -577,7 +580,10 @@ fn convert_system_to_sdk(system: &SystemContent) -> Vec<SystemContentBlock> {
 }
 
 /// Convert tools to SDK ToolConfiguration
-fn convert_tools_to_sdk(tools: &[serde_json::Value]) -> Result<ToolConfiguration, ApiError> {
+fn convert_tools_to_sdk(
+    tools: &[serde_json::Value],
+    tool_name_mapper: &mut ToolNameMapper,
+) -> Result<ToolConfiguration, ApiError> {
     let mut sdk_tools = Vec::new();
 
     for tool in tools {
@@ -586,10 +592,13 @@ fn convert_tools_to_sdk(tools: &[serde_json::Value]) -> Result<ToolConfiguration
             continue;
         }
 
-        let name = tool
+        let original_name = tool
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ApiError::bad_request("Tool missing name"))?;
+
+        // Use the mapper to get a short name if needed (Bedrock has 64 char limit)
+        let name = tool_name_mapper.get_or_create_short_name(original_name);
 
         let description = tool
             .get("description")
@@ -602,13 +611,20 @@ fn convert_tools_to_sdk(tools: &[serde_json::Value]) -> Result<ToolConfiguration
             .unwrap_or(serde_json::json!({"type": "object", "properties": {}}));
 
         let tool_spec = ToolSpecification::builder()
-            .name(name)
+            .name(&name)
             .description(description)
             .input_schema(SdkToolInputSchema::Json(json_to_document(&input_schema)))
             .build()
             .map_err(|e| ApiError::bad_request(format!("Failed to build tool spec: {}", e)))?;
 
         sdk_tools.push(SdkTool::ToolSpec(tool_spec));
+    }
+
+    if tool_name_mapper.has_mappings() {
+        tracing::info!(
+            mapping_count = tool_name_mapper.mapping_count(),
+            "Tool names were shortened due to Bedrock's 64 character limit"
+        );
     }
 
     Ok(ToolConfiguration::builder()
@@ -657,6 +673,7 @@ fn json_to_document(value: &serde_json::Value) -> aws_smithy_types::Document {
 fn convert_converse_response(
     output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
     original_model: &str,
+    tool_name_mapper: &ToolNameMapper,
 ) -> Result<MessageResponse, ApiError> {
     let message_id = format!("msg_{}", Uuid::new_v4().to_string().replace("-", ""));
 
@@ -665,7 +682,7 @@ fn convert_converse_response(
     if let Some(output_content) = output.output() {
         if let aws_sdk_bedrockruntime::types::ConverseOutput::Message(msg) = output_content {
             for block in msg.content() {
-                if let Some(converted) = convert_sdk_content_to_anthropic(block) {
+                if let Some(converted) = convert_sdk_content_to_anthropic(block, tool_name_mapper) {
                     content.push(converted);
                 }
             }
@@ -709,18 +726,25 @@ fn convert_converse_response(
 }
 
 /// Convert SDK content block to Anthropic ContentBlock
-fn convert_sdk_content_to_anthropic(block: &SdkContentBlock) -> Option<ContentBlock> {
+fn convert_sdk_content_to_anthropic(
+    block: &SdkContentBlock,
+    tool_name_mapper: &ToolNameMapper,
+) -> Option<ContentBlock> {
     match block {
         SdkContentBlock::Text(text) => Some(ContentBlock::Text {
             text: text.clone(),
             cache_control: None,
         }),
-        SdkContentBlock::ToolUse(tool_use) => Some(ContentBlock::ToolUse {
-            id: tool_use.tool_use_id().to_string(),
-            name: tool_use.name().to_string(),
-            input: document_to_json(tool_use.input()),
-            caller: None,
-        }),
+        SdkContentBlock::ToolUse(tool_use) => {
+            // Restore original tool name if it was shortened
+            let name = tool_name_mapper.restore_original_name(tool_use.name());
+            Some(ContentBlock::ToolUse {
+                id: tool_use.tool_use_id().to_string(),
+                name,
+                input: document_to_json(tool_use.input()),
+                caller: None,
+            })
+        }
         _ => None,
     }
 }
@@ -760,6 +784,7 @@ async fn create_streaming_response(
     request_id: &str,
     original_model: &str,
     bedrock_model: &str,
+    tool_name_mapper: ToolNameMapper,
 ) -> Result<Sse<std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>>, ApiError>
 {
     // Get streaming response from Bedrock
@@ -775,6 +800,8 @@ async fn create_streaming_response(
     let model_id = original_model.to_string();
     let bedrock_model_id = bedrock_model.to_string();
     let req_id = request_id.to_string();
+    // Clone mapper for use in the async stream
+    let mapper = tool_name_mapper;
 
     // Create the SSE stream
     let stream = async_stream::stream! {
@@ -821,10 +848,12 @@ async fn create_streaming_response(
                             let content_block = if let Some(start) = block_start.start() {
                                 match start {
                                     aws_sdk_bedrockruntime::types::ContentBlockStart::ToolUse(tool_start) => {
+                                        // Restore original tool name if it was shortened
+                                        let original_name = mapper.restore_original_name(tool_start.name());
                                         serde_json::json!({
                                             "type": "tool_use",
                                             "id": tool_start.tool_use_id(),
-                                            "name": tool_start.name(),
+                                            "name": original_name,
                                             "input": {}
                                         })
                                     }

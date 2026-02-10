@@ -42,6 +42,10 @@ struct Args {
     /// DynamoDB endpoint URL (for local development)
     #[arg(long)]
     endpoint_url: Option<String>,
+
+    /// AWS region
+    #[arg(short, long)]
+    region: Option<String>,
 }
 
 #[tokio::main]
@@ -56,7 +60,11 @@ async fn main() -> Result<()> {
     let created_at = Utc::now().timestamp();
 
     // Configure AWS SDK
-    let mut config_builder = aws_config::defaults(BehaviorVersion::latest());
+    let region_str = args
+        .region
+        .unwrap_or_else(|| std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()));
+    let region = aws_config::Region::new(region_str);
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest()).region(region);
 
     // Check for endpoint URL from args or environment
     let endpoint_url = args.endpoint_url

@@ -22,6 +22,10 @@ struct Args {
     #[arg(long)]
     endpoint_url: Option<String>,
 
+    /// AWS region
+    #[arg(short, long)]
+    region: Option<String>,
+
     /// Table name prefix
     #[arg(long, default_value = "anthropic-proxy")]
     prefix: String,
@@ -35,7 +39,11 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Configure AWS SDK
-    let mut config_builder = aws_config::defaults(BehaviorVersion::latest());
+    let region_str = args
+        .region
+        .unwrap_or_else(|| std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()));
+    let region = aws_config::Region::new(region_str.clone());
+    let mut config_builder = aws_config::defaults(BehaviorVersion::latest()).region(region);
 
     // Check for endpoint URL from args or environment
     let endpoint_url = args
@@ -47,6 +55,7 @@ async fn main() -> Result<()> {
         println!("Using DynamoDB endpoint: {}", url);
     }
 
+    println!("Using AWS region: {}", region_str);
     let aws_config = config_builder.load().await;
     let client = aws_sdk_dynamodb::Client::new(&aws_config);
 

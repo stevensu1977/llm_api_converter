@@ -3,7 +3,7 @@ runtime: docker
 build:
   commands:
     build:
-      - echo "Using pre-built Docker image"
+      - echo "Building with pre-compiled binaries from GitHub Release"
 run:
   runtime-version: latest
   network:

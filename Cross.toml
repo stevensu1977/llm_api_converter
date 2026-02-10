@@ -2,16 +2,25 @@
 passthrough = [
     "RUST_BACKTRACE",
     "RUST_LOG",
+    "AWS_LC_SYS_CMAKE_BUILDER",
+    "CC",
+    "CXX",
 ]
 
 [target.x86_64-unknown-linux-gnu]
-image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
 pre-build = [
-    "apt-get update && apt-get install -y cmake perl"
+    "apt-get update && apt-get install -y cmake perl clang lld"
 ]
 
+[target.x86_64-unknown-linux-gnu.env]
+passthrough = ["AWS_LC_SYS_CMAKE_BUILDER", "CC", "CXX"]
+
 [target.aarch64-unknown-linux-gnu]
-image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
 pre-build = [
-    "apt-get update && apt-get install -y cmake perl"
+    "apt-get update && apt-get install -y cmake perl clang lld llvm"
 ]
+
+[target.aarch64-unknown-linux-gnu.env]
+passthrough = ["AWS_LC_SYS_CMAKE_BUILDER"]
+CC = "clang"
+CXX = "clang++"

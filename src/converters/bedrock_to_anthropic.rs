@@ -133,12 +133,12 @@ impl BedrockToAnthropicConverter {
         block: &BedrockContentBlock,
     ) -> Result<ContentBlock, ResponseConversionError> {
         match block {
-            BedrockContentBlock::Text { text } => Ok(ContentBlock::Text {
+            BedrockContentBlock::Text { text, .. } => Ok(ContentBlock::Text {
                 text: text.clone(),
                 cache_control: None,
             }),
 
-            BedrockContentBlock::Image { image } => {
+            BedrockContentBlock::Image { image, .. } => {
                 // Encode bytes to base64
                 let data = BASE64.encode(&image.source.bytes);
                 let media_type = format!("image/{}", image.format);
@@ -153,7 +153,7 @@ impl BedrockToAnthropicConverter {
                 })
             }
 
-            BedrockContentBlock::Document { document } => {
+            BedrockContentBlock::Document { document, .. } => {
                 // Encode bytes to base64
                 let data = BASE64.encode(&document.source.bytes);
                 let media_type = format!("application/{}", document.format);
@@ -168,14 +168,14 @@ impl BedrockToAnthropicConverter {
                 })
             }
 
-            BedrockContentBlock::ToolUse { tool_use } => Ok(ContentBlock::ToolUse {
+            BedrockContentBlock::ToolUse { tool_use, .. } => Ok(ContentBlock::ToolUse {
                 id: tool_use.tool_use_id.clone(),
                 name: tool_use.name.clone(),
                 input: tool_use.input.clone(),
                 caller: None, // No caller info from Bedrock
             }),
 
-            BedrockContentBlock::ToolResult { tool_result } => {
+            BedrockContentBlock::ToolResult { tool_result, .. } => {
                 // Convert tool result content to text
                 let content_text = tool_result
                     .content
@@ -506,6 +506,7 @@ mod tests {
 
         let bedrock_block = BedrockContentBlock::Text {
             text: "Hello, world!".to_string(),
+            cache_point: None,
         };
 
         let result = converter.convert_content_block(&bedrock_block).unwrap();
@@ -528,6 +529,7 @@ mod tests {
                 name: "get_weather".to_string(),
                 input: serde_json::json!({"location": "San Francisco"}),
             },
+            cache_point: None,
         };
 
         let result = converter.convert_content_block(&bedrock_block).unwrap();
@@ -728,6 +730,7 @@ mod tests {
                     name: "get_weather".to_string(),
                     input: serde_json::json!({}),
                 },
+                cache_point: None,
             },
             BedrockContentBlock::text("Second part"),
         ];
@@ -766,6 +769,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "San Francisco"}),
                             },
+                            cache_point: None,
                         },
                     ],
                 },
@@ -811,6 +815,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "San Francisco"}),
                             },
+                            cache_point: None,
                         },
                         BedrockContentBlock::ToolUse {
                             tool_use: BedrockToolUseData {
@@ -818,6 +823,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "Tokyo"}),
                             },
+                            cache_point: None,
                         },
                     ],
                 },
@@ -858,6 +864,7 @@ mod tests {
                 ],
                 status: Some("success".to_string()),
             },
+            cache_point: None,
         };
 
         let result = converter.convert_content_block(&bedrock_block).unwrap();
@@ -894,6 +901,7 @@ mod tests {
                 content: vec![serde_json::json!({"text": "Error: Location not found"})],
                 status: Some("error".to_string()),
             },
+            cache_point: None,
         };
 
         let result = converter.convert_content_block(&bedrock_block).unwrap();

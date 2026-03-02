@@ -8,6 +8,46 @@
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
+// Cache Point for Prompt Caching
+// ============================================================================
+
+/// Cache point for prompt caching in Bedrock Converse API.
+///
+/// Can be attached to content blocks in messages, system messages, and tools.
+/// See: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BedrockCachePoint {
+    #[serde(rename = "type")]
+    pub cache_type: String, // "default"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>, // "5m" or "1h"
+}
+
+impl Default for BedrockCachePoint {
+    fn default() -> Self {
+        Self {
+            cache_type: "default".to_string(),
+            ttl: None,
+        }
+    }
+}
+
+impl BedrockCachePoint {
+    /// Create a new cache point with default type.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a cache point with specific TTL.
+    pub fn with_ttl(ttl: impl Into<String>) -> Self {
+        Self {
+            cache_type: "default".to_string(),
+            ttl: Some(ttl.into()),
+        }
+    }
+}
+
+// ============================================================================
 // Content Block Types for Bedrock
 // ============================================================================
 
@@ -93,23 +133,50 @@ pub struct BedrockToolResultData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum BedrockContentBlock {
-    Text { text: String },
-    Image { image: BedrockImageData },
-    Document { document: BedrockDocumentData },
+    Text {
+        text: String,
+        #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+        cache_point: Option<BedrockCachePoint>,
+    },
+    Image {
+        image: BedrockImageData,
+        #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+        cache_point: Option<BedrockCachePoint>,
+    },
+    Document {
+        document: BedrockDocumentData,
+        #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+        cache_point: Option<BedrockCachePoint>,
+    },
     ToolUse {
         #[serde(rename = "toolUse")]
         tool_use: BedrockToolUseData,
+        #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+        cache_point: Option<BedrockCachePoint>,
     },
     ToolResult {
         #[serde(rename = "toolResult")]
         tool_result: BedrockToolResultData,
+        #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+        cache_point: Option<BedrockCachePoint>,
     },
 }
 
 impl BedrockContentBlock {
     /// Create a text content block.
     pub fn text(text: impl Into<String>) -> Self {
-        BedrockContentBlock::Text { text: text.into() }
+        BedrockContentBlock::Text {
+            text: text.into(),
+            cache_point: None,
+        }
+    }
+
+    /// Create a text content block with cache point.
+    pub fn text_with_cache(text: impl Into<String>, cache_point: Option<BedrockCachePoint>) -> Self {
+        BedrockContentBlock::Text {
+            text: text.into(),
+            cache_point,
+        }
     }
 
     /// Check if this is a text block.
@@ -120,8 +187,19 @@ impl BedrockContentBlock {
     /// Get text content if this is a text block.
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            BedrockContentBlock::Text { text } => Some(text),
+            BedrockContentBlock::Text { text, .. } => Some(text),
             _ => None,
+        }
+    }
+
+    /// Get cache point if present.
+    pub fn cache_point(&self) -> Option<&BedrockCachePoint> {
+        match self {
+            BedrockContentBlock::Text { cache_point, .. } => cache_point.as_ref(),
+            BedrockContentBlock::Image { cache_point, .. } => cache_point.as_ref(),
+            BedrockContentBlock::Document { cache_point, .. } => cache_point.as_ref(),
+            BedrockContentBlock::ToolUse { cache_point, .. } => cache_point.as_ref(),
+            BedrockContentBlock::ToolResult { cache_point, .. } => cache_point.as_ref(),
         }
     }
 }
@@ -179,6 +257,8 @@ pub struct BedrockToolSpec {
 pub struct BedrockTool {
     #[serde(rename = "toolSpec")]
     pub tool_spec: BedrockToolSpec,
+    #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+    pub cache_point: Option<BedrockCachePoint>,
 }
 
 /// Tool choice in Bedrock format.
@@ -265,11 +345,24 @@ impl BedrockInferenceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BedrockSystemMessage {
     pub text: String,
+    #[serde(rename = "cachePoint", skip_serializing_if = "Option::is_none")]
+    pub cache_point: Option<BedrockCachePoint>,
 }
 
 impl BedrockSystemMessage {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            cache_point: None,
+        }
+    }
+
+    /// Create a system message with cache point.
+    pub fn with_cache(text: impl Into<String>, cache_point: Option<BedrockCachePoint>) -> Self {
+        Self {
+            text: text.into(),
+            cache_point,
+        }
     }
 }
 
@@ -622,6 +715,7 @@ mod tests {
                     }),
                 },
             },
+            cache_point: None,
         };
 
         let config = BedrockToolConfig {
@@ -633,5 +727,17 @@ mod tests {
 
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"name\":\"get_weather\""));
+    }
+
+    #[test]
+    fn test_bedrock_cache_point() {
+        let cache_point = BedrockCachePoint::with_ttl("1h");
+        assert_eq!(cache_point.cache_type, "default");
+        assert_eq!(cache_point.ttl, Some("1h".to_string()));
+
+        let content = BedrockContentBlock::text_with_cache("Hello", Some(cache_point));
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("\"cachePoint\""));
+        assert!(json.contains("\"ttl\":\"1h\""));
     }
 }

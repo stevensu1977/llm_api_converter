@@ -171,10 +171,10 @@ impl BedrockToOpenAIConverter {
 
         for block in blocks {
             match block {
-                BedrockContentBlock::Text { text } => {
+                BedrockContentBlock::Text { text, .. } => {
                     text_parts.push(text.clone());
                 }
-                BedrockContentBlock::ToolUse { tool_use } => {
+                BedrockContentBlock::ToolUse { tool_use, .. } => {
                     let tool_call = ToolCall {
                         id: tool_use.tool_use_id.clone(),
                         tool_type: "function".to_string(),
@@ -551,6 +551,7 @@ mod tests {
                             name: "get_weather".to_string(),
                             input: serde_json::json!({"location": "San Francisco"}),
                         },
+                        cache_point: None,
                     }],
                 },
             },
@@ -589,6 +590,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "NYC"}),
                             },
+                            cache_point: None,
                         },
                     ],
                 },
@@ -717,6 +719,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "NYC"}),
                             },
+                            cache_point: None,
                         },
                         BedrockContentBlock::ToolUse {
                             tool_use: BedrockToolUseData {
@@ -724,6 +727,7 @@ mod tests {
                                 name: "get_weather".to_string(),
                                 input: serde_json::json!({"location": "LA"}),
                             },
+                            cache_point: None,
                         },
                     ],
                 },

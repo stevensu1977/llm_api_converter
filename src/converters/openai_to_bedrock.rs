@@ -310,7 +310,10 @@ impl OpenAIToBedrockConverter {
                         input: serde_json::from_str(&tool_call.function.arguments)
                             .unwrap_or_else(|_| serde_json::json!({})),
                     };
-                    blocks.push(BedrockContentBlock::ToolUse { tool_use });
+                    blocks.push(BedrockContentBlock::ToolUse {
+                        tool_use,
+                        cache_point: None,
+                    });
                 }
 
                 return Ok(blocks);
@@ -339,7 +342,10 @@ impl OpenAIToBedrockConverter {
                 }
                 ContentPart::ImageUrl { image_url } => {
                     let image = self.convert_image_url(&image_url.url)?;
-                    blocks.push(BedrockContentBlock::Image { image });
+                    blocks.push(BedrockContentBlock::Image {
+                        image,
+                        cache_point: None,
+                    });
                 }
             }
         }
@@ -418,7 +424,10 @@ impl OpenAIToBedrockConverter {
             status: Some("success".to_string()),
         };
 
-        Ok(vec![BedrockContentBlock::ToolResult { tool_result }])
+        Ok(vec![BedrockContentBlock::ToolResult {
+            tool_result,
+            cache_point: None,
+        }])
     }
 
     // ========================================================================
@@ -512,6 +521,7 @@ impl OpenAIToBedrockConverter {
                 description: tool.function.description.clone().unwrap_or_default(),
                 input_schema: BedrockToolInputSchema { json: input_schema },
             },
+            cache_point: None, // OpenAI doesn't support prompt caching
         })
     }
 
@@ -760,7 +770,7 @@ mod tests {
         let result = converter.convert_message_content(&message).unwrap();
 
         assert_eq!(result.len(), 1);
-        if let BedrockContentBlock::ToolUse { tool_use } = &result[0] {
+        if let BedrockContentBlock::ToolUse { tool_use, .. } = &result[0] {
             assert_eq!(tool_use.tool_use_id, "call_123");
             assert_eq!(tool_use.name, "get_weather");
         } else {
@@ -783,7 +793,7 @@ mod tests {
         let result = converter.convert_tool_result_message(&message).unwrap();
 
         assert_eq!(result.len(), 1);
-        if let BedrockContentBlock::ToolResult { tool_result } = &result[0] {
+        if let BedrockContentBlock::ToolResult { tool_result, .. } = &result[0] {
             assert_eq!(tool_result.tool_use_id, "call_123");
             assert_eq!(tool_result.status, Some("success".to_string()));
         } else {

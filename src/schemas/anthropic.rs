@@ -15,12 +15,30 @@ use std::collections::HashMap;
 pub struct CacheControl {
     #[serde(rename = "type")]
     pub cache_type: String, // "ephemeral"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>, // "5m" or "1h"
 }
 
 impl Default for CacheControl {
     fn default() -> Self {
         Self {
             cache_type: "ephemeral".to_string(),
+            ttl: None,
+        }
+    }
+}
+
+impl CacheControl {
+    /// Create a new cache control with default type.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a cache control with specific TTL.
+    pub fn with_ttl(ttl: impl Into<String>) -> Self {
+        Self {
+            cache_type: "ephemeral".to_string(),
+            ttl: Some(ttl.into()),
         }
     }
 }

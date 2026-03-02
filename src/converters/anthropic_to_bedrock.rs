@@ -4,14 +4,15 @@
 //! to AWS Bedrock Converse API format.
 
 use crate::schemas::anthropic::{
-    ContentBlock, Message, MessageContent, MessageRequest, SystemContent, Tool, ToolChoice,
-    ToolInputSchema, ToolResultValue,
+    CacheControl, ContentBlock, Message, MessageContent, MessageRequest, SystemContent, Tool,
+    ToolChoice, ToolInputSchema, ToolResultValue,
 };
 use crate::schemas::bedrock::{
-    BedrockContentBlock, BedrockConverseRequest, BedrockDocumentData, BedrockDocumentSource,
-    BedrockImageData, BedrockImageSource, BedrockInferenceConfig, BedrockMessage,
-    BedrockSystemMessage, BedrockTool, BedrockToolChoice, BedrockToolChoiceTool, BedrockToolConfig,
-    BedrockToolInputSchema, BedrockToolResultData, BedrockToolSpec, BedrockToolUseData,
+    BedrockCachePoint, BedrockContentBlock, BedrockConverseRequest, BedrockDocumentData,
+    BedrockDocumentSource, BedrockImageData, BedrockImageSource, BedrockInferenceConfig,
+    BedrockMessage, BedrockSystemMessage, BedrockTool, BedrockToolChoice, BedrockToolChoiceTool,
+    BedrockToolConfig, BedrockToolInputSchema, BedrockToolResultData, BedrockToolSpec,
+    BedrockToolUseData,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use std::collections::HashMap;
@@ -298,6 +299,14 @@ impl AnthropicToBedrockConverter {
         Ok(result)
     }
 
+    /// Convert Anthropic cache_control to Bedrock cachePoint.
+    fn convert_cache_control(cache_control: &Option<CacheControl>) -> Option<BedrockCachePoint> {
+        cache_control.as_ref().map(|cc| BedrockCachePoint {
+            cache_type: "default".to_string(), // Anthropic "ephemeral" -> Bedrock "default"
+            ttl: cc.ttl.clone(),
+        })
+    }
+
     /// Convert a single Anthropic content block to Bedrock format.
     ///
     /// Returns None for blocks that should be skipped (e.g., thinking blocks
@@ -307,16 +316,27 @@ impl AnthropicToBedrockConverter {
         block: &ContentBlock,
     ) -> Result<Option<BedrockContentBlock>, ConversionError> {
         match block {
-            ContentBlock::Text { text, .. } => Ok(Some(BedrockContentBlock::text(text))),
-
-            ContentBlock::Image { source, .. } => {
-                let image = self.convert_image(source)?;
-                Ok(Some(BedrockContentBlock::Image { image }))
+            ContentBlock::Text { text, cache_control } => {
+                let cache_point = Self::convert_cache_control(cache_control);
+                Ok(Some(BedrockContentBlock::Text {
+                    text: text.clone(),
+                    cache_point,
+                }))
             }
 
-            ContentBlock::Document { source, .. } => {
+            ContentBlock::Image { source, cache_control } => {
+                let image = self.convert_image(source)?;
+                let cache_point = Self::convert_cache_control(cache_control);
+                Ok(Some(BedrockContentBlock::Image { image, cache_point }))
+            }
+
+            ContentBlock::Document { source, cache_control } => {
                 let document = self.convert_document(source)?;
-                Ok(Some(BedrockContentBlock::Document { document }))
+                let cache_point = Self::convert_cache_control(cache_control);
+                Ok(Some(BedrockContentBlock::Document {
+                    document,
+                    cache_point,
+                }))
             }
 
             ContentBlock::ToolUse { id, name, input, .. } => {
@@ -325,17 +345,24 @@ impl AnthropicToBedrockConverter {
                     name: name.clone(),
                     input: input.clone(),
                 };
-                Ok(Some(BedrockContentBlock::ToolUse { tool_use }))
+                Ok(Some(BedrockContentBlock::ToolUse {
+                    tool_use,
+                    cache_point: None, // ToolUse typically doesn't have cache_control
+                }))
             }
 
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 is_error,
-                ..
+                cache_control,
             } => {
                 let tool_result = self.convert_tool_result(tool_use_id, content, *is_error)?;
-                Ok(Some(BedrockContentBlock::ToolResult { tool_result }))
+                let cache_point = Self::convert_cache_control(cache_control);
+                Ok(Some(BedrockContentBlock::ToolResult {
+                    tool_result,
+                    cache_point,
+                }))
             }
 
             // Thinking blocks - skip for now (Bedrock handles differently)
@@ -450,9 +477,13 @@ impl AnthropicToBedrockConverter {
     pub fn convert_system(&self, system: &SystemContent) -> Vec<BedrockSystemMessage> {
         match system {
             SystemContent::Text(text) => vec![BedrockSystemMessage::new(text)],
-            SystemContent::Messages(messages) => {
-                messages.iter().map(|m| BedrockSystemMessage::new(&m.text)).collect()
-            }
+            SystemContent::Messages(messages) => messages
+                .iter()
+                .map(|m| {
+                    let cache_point = Self::convert_cache_control(&m.cache_control);
+                    BedrockSystemMessage::with_cache(&m.text, cache_point)
+                })
+                .collect(),
         }
     }
 
@@ -509,6 +540,7 @@ impl AnthropicToBedrockConverter {
     fn convert_tool(&self, tool: &serde_json::Value) -> Result<BedrockTool, ConversionError> {
         // Try to parse as a regular Tool
         if let Ok(parsed) = serde_json::from_value::<Tool>(tool.clone()) {
+            let cache_point = Self::convert_cache_control(&parsed.cache_control);
             return Ok(BedrockTool {
                 tool_spec: BedrockToolSpec {
                     name: parsed.name,
@@ -517,6 +549,7 @@ impl AnthropicToBedrockConverter {
                         json: self.convert_input_schema(&parsed.input_schema),
                     },
                 },
+                cache_point,
             });
         }
 
@@ -548,12 +581,22 @@ impl AnthropicToBedrockConverter {
             })
         });
 
+        // Try to extract cache_control from raw JSON
+        let cache_point = tool
+            .get("cache_control")
+            .and_then(|cc| serde_json::from_value::<CacheControl>(cc.clone()).ok())
+            .map(|cc| BedrockCachePoint {
+                cache_type: "default".to_string(),
+                ttl: cc.ttl,
+            });
+
         Ok(BedrockTool {
             tool_spec: BedrockToolSpec {
                 name: name.to_string(),
                 description: description.to_string(),
                 input_schema: BedrockToolInputSchema { json: input_schema },
             },
+            cache_point,
         })
     }
 
@@ -737,7 +780,7 @@ mod tests {
         let result = converter.convert_content_block(&block).unwrap();
         assert!(result.is_some());
 
-        if let Some(BedrockContentBlock::ToolUse { tool_use }) = result {
+        if let Some(BedrockContentBlock::ToolUse { tool_use, .. }) = result {
             assert_eq!(tool_use.tool_use_id, "tool_123");
             assert_eq!(tool_use.name, "get_weather");
         } else {
@@ -759,7 +802,7 @@ mod tests {
         let result = converter.convert_content_block(&block).unwrap();
         assert!(result.is_some());
 
-        if let Some(BedrockContentBlock::ToolResult { tool_result }) = result {
+        if let Some(BedrockContentBlock::ToolResult { tool_result, .. }) = result {
             assert_eq!(tool_result.tool_use_id, "tool_123");
             assert_eq!(tool_result.status, Some("success".to_string()));
         } else {
@@ -897,7 +940,7 @@ mod tests {
         };
 
         let result = converter.convert_content_block(&block).unwrap();
-        if let Some(BedrockContentBlock::ToolResult { tool_result }) = result {
+        if let Some(BedrockContentBlock::ToolResult { tool_result, .. }) = result {
             assert_eq!(tool_result.status, Some("error".to_string()));
         } else {
             panic!("Expected ToolResult block");
@@ -955,7 +998,7 @@ mod tests {
         };
 
         let result = converter.convert_content_block(&block).unwrap();
-        if let Some(BedrockContentBlock::ToolResult { tool_result }) = result {
+        if let Some(BedrockContentBlock::ToolResult { tool_result, .. }) = result {
             assert_eq!(tool_result.tool_use_id, "tool_456");
             assert_eq!(tool_result.content.len(), 2);
             assert_eq!(tool_result.status, Some("success".to_string()));

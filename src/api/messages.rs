@@ -183,10 +183,15 @@ impl IntoResponse for MessageApiResponse {
 pub async fn create_message(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<MessageRequest>,
+    Json(mut request): Json<MessageRequest>,
 ) -> Result<MessageApiResponse, ApiError> {
     let start_time = Instant::now();
     let request_id = Uuid::new_v4().to_string();
+
+    // Inject prompt cache breakpoints if enabled
+    if state.settings.features.prompt_caching_enabled {
+        crate::services::prompt_cache::inject_cache_breakpoints(&mut request);
+    }
 
     // Determine which backend to use
     let backend = select_backend(&state, &request.model);

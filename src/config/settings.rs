@@ -86,7 +86,7 @@ impl Default for FeatureFlags {
             enable_ptc: false,
             enable_extended_thinking: true,
             enable_document_support: true,
-            prompt_caching_enabled: false,
+            prompt_caching_enabled: true,
         }
     }
 }
@@ -109,6 +109,24 @@ impl Default for PtcConfig {
             execution_timeout_seconds: 60,
             memory_limit: "256m".to_string(),
             network_disabled: true,
+        }
+    }
+}
+
+/// Storage backend configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StorageConfig {
+    /// Backend type: "dynamodb" or "sqlite"
+    pub backend: String,
+    /// Database URL for SQLite (e.g., "sqlite:///data/llm_proxy.db")
+    pub database_url: Option<String>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            backend: "dynamodb".to_string(),
+            database_url: None,
         }
     }
 }
@@ -270,6 +288,9 @@ pub struct Settings {
     // Gemini configuration
     pub gemini: GeminiConfig,
 
+    // Storage backend configuration
+    pub storage: StorageConfig,
+
     // Bedrock multi-profile configuration
     pub bedrock: BedrockConfig,
 
@@ -373,7 +394,7 @@ impl Settings {
                 enable_document_support: env_or_default("ENABLE_DOCUMENT_SUPPORT", "true")
                     .parse()
                     .unwrap_or(true),
-                prompt_caching_enabled: env_or_default("PROMPT_CACHING_ENABLED", "false")
+                prompt_caching_enabled: env_or_default("PROMPT_CACHING_ENABLED", "true")
                     .parse()
                     .unwrap_or(false),
             },
@@ -418,6 +439,12 @@ impl Settings {
                 timeout_seconds: env_or_default("GEMINI_TIMEOUT_SECONDS", "120")
                     .parse()
                     .unwrap_or(120),
+            },
+
+            // Storage configuration
+            storage: StorageConfig {
+                backend: env_or_default("STORAGE_BACKEND", "dynamodb"),
+                database_url: env::var("DATABASE_URL").ok(),
             },
 
             // Bedrock multi-profile configuration
@@ -651,6 +678,7 @@ impl Default for Settings {
             ptc: PtcConfig::default(),
             backend_pool: BackendPoolConfig::default(),
             gemini: GeminiConfig::default(),
+            storage: StorageConfig::default(),
             bedrock: BedrockConfig::default(),
             default_model_mapping: Self::load_default_model_mapping(),
             streaming_timeout_seconds: 300,

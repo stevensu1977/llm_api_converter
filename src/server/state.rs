@@ -4,7 +4,7 @@
 //! to all request handlers via Axum's state extraction.
 
 use crate::config::{create_bedrock_client, create_dynamodb_client, Settings};
-use crate::db::DynamoDbClient;
+use crate::db::{DynamoDbBackend, DynamoDbClient, StorageBackend};
 use crate::services::{BedrockService, GeminiConfig as GeminiServiceConfig, GeminiService, LoadBalanceStrategy, PtcService, UsageTracker};
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,8 +18,11 @@ pub struct AppState {
     /// Application settings
     pub settings: Arc<Settings>,
 
-    /// DynamoDB client for database operations
+    /// DynamoDB client for database operations (kept for backward compatibility)
     pub dynamodb: Arc<DynamoDbClient>,
+
+    /// Unified storage backend (DynamoDB, SQLite, etc.)
+    pub storage: Arc<dyn StorageBackend>,
 
     /// Bedrock service for model inference
     pub bedrock: Arc<BedrockService>,
@@ -57,6 +60,9 @@ impl AppState {
         tracing::debug!("Creating DynamoDB client");
         let dynamodb_sdk_client = create_dynamodb_client(&settings).await;
         let dynamodb = Arc::new(DynamoDbClient::new(settings.clone(), dynamodb_sdk_client));
+
+        // Create unified storage backend (wraps DynamoDB for now)
+        let storage: Arc<dyn StorageBackend> = Arc::new(DynamoDbBackend::new(dynamodb.clone()));
 
         tracing::debug!("Creating Bedrock client");
         // Check if multiple Bedrock profiles are configured
@@ -137,6 +143,7 @@ impl AppState {
         Ok(Self {
             settings,
             dynamodb,
+            storage,
             bedrock,
             usage_tracker,
             start_time,

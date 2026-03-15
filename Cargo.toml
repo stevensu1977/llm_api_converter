@@ -40,6 +40,9 @@ aws-smithy-runtime-api = "1.1"
 bollard = { version = "0.16", default-features = false, features = ["ssl", "rustls"] }
 tar = "0.4"
 
+# Async trait
+async-trait = "0.1"
+
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"
@@ -80,9 +83,17 @@ governor = "0.6"
 moka = { version = "0.12", features = ["future"] }
 aws-smithy-types = "1.3.6"
 
+# SQLite (optional)
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"], optional = true }
+
+[features]
+default = []
+sqlite = ["sqlx"]
+
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3.10"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
 
 [[bench]]
 name = "conversion_bench"

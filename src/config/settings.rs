@@ -113,6 +113,60 @@ impl Default for PtcConfig {
     }
 }
 
+/// OpenAI API configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OpenAIConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing)]
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for OpenAIConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            base_url: None,
+            timeout_seconds: 120,
+        }
+    }
+}
+
+impl OpenAIConfig {
+    pub fn is_available(&self) -> bool {
+        self.enabled && self.api_key.is_some()
+    }
+}
+
+/// DeepSeek API configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeepSeekConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing)]
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for DeepSeekConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            base_url: None,
+            timeout_seconds: 120,
+        }
+    }
+}
+
+impl DeepSeekConfig {
+    pub fn is_available(&self) -> bool {
+        self.enabled && self.api_key.is_some()
+    }
+}
+
 /// Storage backend configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StorageConfig {
@@ -288,6 +342,12 @@ pub struct Settings {
     // Gemini configuration
     pub gemini: GeminiConfig,
 
+    // OpenAI configuration
+    pub openai: OpenAIConfig,
+
+    // DeepSeek configuration
+    pub deepseek: DeepSeekConfig,
+
     // Storage backend configuration
     pub storage: StorageConfig,
 
@@ -437,6 +497,30 @@ impl Settings {
                 api_keys: parse_comma_separated_env("GEMINI_API_KEYS"),
                 base_url: env::var("GEMINI_BASE_URL").ok(),
                 timeout_seconds: env_or_default("GEMINI_TIMEOUT_SECONDS", "120")
+                    .parse()
+                    .unwrap_or(120),
+            },
+
+            // OpenAI configuration
+            openai: OpenAIConfig {
+                enabled: env_or_default("OPENAI_ENABLED", "false")
+                    .parse()
+                    .unwrap_or(false),
+                api_key: env::var("OPENAI_API_KEY").ok(),
+                base_url: env::var("OPENAI_BASE_URL").ok(),
+                timeout_seconds: env_or_default("OPENAI_TIMEOUT_SECONDS", "120")
+                    .parse()
+                    .unwrap_or(120),
+            },
+
+            // DeepSeek configuration
+            deepseek: DeepSeekConfig {
+                enabled: env_or_default("DEEPSEEK_ENABLED", "false")
+                    .parse()
+                    .unwrap_or(false),
+                api_key: env::var("DEEPSEEK_API_KEY").ok(),
+                base_url: env::var("DEEPSEEK_BASE_URL").ok(),
+                timeout_seconds: env_or_default("DEEPSEEK_TIMEOUT_SECONDS", "120")
                     .parse()
                     .unwrap_or(120),
             },
@@ -678,6 +762,8 @@ impl Default for Settings {
             ptc: PtcConfig::default(),
             backend_pool: BackendPoolConfig::default(),
             gemini: GeminiConfig::default(),
+            openai: OpenAIConfig::default(),
+            deepseek: DeepSeekConfig::default(),
             storage: StorageConfig::default(),
             bedrock: BedrockConfig::default(),
             default_model_mapping: Self::load_default_model_mapping(),

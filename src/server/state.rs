@@ -5,7 +5,11 @@
 
 use crate::config::{create_bedrock_client, create_dynamodb_client, Settings};
 use crate::db::{DynamoDbBackend, DynamoDbClient, StorageBackend};
-use crate::services::{BedrockService, GeminiConfig as GeminiServiceConfig, GeminiService, LoadBalanceStrategy, PtcService, UsageTracker};
+use crate::services::{
+    BedrockProvider, BedrockService, DeepSeekProvider, DeepSeekProviderConfig,
+    GeminiConfig as GeminiServiceConfig, GeminiProvider, GeminiService, LoadBalanceStrategy,
+    OpenAIProvider, OpenAIProviderConfig, ProviderRouter, PtcService, UsageTracker,
+};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,6 +42,9 @@ pub struct AppState {
 
     /// Gemini service for Google Gemini API (optional)
     pub gemini_service: Option<Arc<GeminiService>>,
+
+    /// Unified provider router for model-based routing
+    pub provider_router: Arc<ProviderRouter>,
 }
 
 impl AppState {
@@ -138,6 +145,61 @@ impl AppState {
             None
         };
 
+        // Initialize ProviderRouter with all available providers
+        let mut provider_router = ProviderRouter::new();
+
+        // Always register Bedrock provider
+        provider_router.register(Arc::new(BedrockProvider::new(bedrock.clone())));
+
+        // Register Gemini provider if available
+        if let Some(ref gemini_svc) = gemini_service {
+            provider_router.register(Arc::new(GeminiProvider::new(gemini_svc.clone())));
+        }
+
+        // Register OpenAI provider if configured
+        if settings.openai.is_available() {
+            let mut openai_config =
+                OpenAIProviderConfig::new(settings.openai.api_key.clone().unwrap())
+                    .with_timeout(settings.openai.timeout_seconds);
+            if let Some(ref base_url) = settings.openai.base_url {
+                openai_config = openai_config.with_base_url(base_url);
+            }
+            match OpenAIProvider::new(openai_config) {
+                Ok(provider) => {
+                    tracing::info!("OpenAI provider initialized");
+                    provider_router.register(Arc::new(provider));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize OpenAI provider: {}. OpenAI will be disabled.", e);
+                }
+            }
+        } else {
+            tracing::debug!("OpenAI disabled or no API key configured");
+        }
+
+        // Register DeepSeek provider if configured
+        if settings.deepseek.is_available() {
+            let mut deepseek_config =
+                DeepSeekProviderConfig::new(settings.deepseek.api_key.clone().unwrap())
+                    .with_timeout(settings.deepseek.timeout_seconds);
+            if let Some(ref base_url) = settings.deepseek.base_url {
+                deepseek_config = deepseek_config.with_base_url(base_url);
+            }
+            match DeepSeekProvider::new(deepseek_config) {
+                Ok(provider) => {
+                    tracing::info!("DeepSeek provider initialized");
+                    provider_router.register(Arc::new(provider));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize DeepSeek provider: {}. DeepSeek will be disabled.", e);
+                }
+            }
+        } else {
+            tracing::debug!("DeepSeek disabled or no API key configured");
+        }
+
+        let provider_router = Arc::new(provider_router);
+
         tracing::info!("Application state initialized successfully");
 
         Ok(Self {
@@ -149,6 +211,7 @@ impl AppState {
             start_time,
             ptc_service,
             gemini_service,
+            provider_router,
         })
     }
 
